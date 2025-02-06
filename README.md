@@ -1,7 +1,3 @@
-Oh, saya paham sekarang! Berikut adalah **README.md** yang menjelaskan cara penggunaan bot ini, langkah-langkah konfigurasi, dan fungsionalitas bot.
-
----
-
 # Tea-Fi Daily Task Bot
 
 Bot ini secara otomatis menjalankan beberapa tugas harian di Tea-Fi, seperti klaim sugar cubes, melakukan transaksi deposit/withdraw di WMATIC, dan mengelola interaksi dengan API Tea-Fi.
