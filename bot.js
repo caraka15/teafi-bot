@@ -6,7 +6,7 @@ const fs = require('fs');
 
 // Memuat konfigurasi dan ABI dari file JSON
 const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
-const WMATIC_ABI = JSON.parse(fs.readFileSync('abi.json', 'utf8'));
+const TPOL_ABI = JSON.parse(fs.readFileSync('abi.json', 'utf8'));
 
 const ITERATIONS = config.ITERATIONS;
 const RPC_URL = config.RPC_URL;
@@ -17,14 +17,21 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
 // Mendapatkan alamat wallet secara otomatis dari private key
-const WALLET_ADDRESS = wallet.address;  // Wallet address otomatis berdasarkan private key
+const WALLET_ADDRESS = wallet.address;
 const WMATIC_ADDRESS = config.WMATIC_ADDRESS;
+const TPOL_ADDRESS = config.TPOL_ADDRESS;
 const APi_TOTAL_POINT = config.APi_TOTAL_POINT;
-// API URLs for check-in
 const API_URL_CHECK_IN = config.API_URL_CHECK_IN;
 const API_URL_CURRENT = config.API_URL_CURRENT;
 const API_URLS = config.API_URLS;
 
+// Headers untuk semua request API
+const headers = {
+    "Content-Type": "application/json",
+    "Origin": "https://app.tea-fi.com",
+    "Referer": "https://app.tea-fi.com/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+};
 
 // Fungsi untuk melakukan POST request (check-in)
 const dailyCheckIn = async (retryCount = 3) => {
@@ -36,7 +43,7 @@ const dailyCheckIn = async (retryCount = 3) => {
 
         const response = await fetch(`${API_URL_CHECK_IN}?address=${WALLET_ADDRESS}`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: headers,
             body: JSON.stringify(payload),
         });
 
@@ -141,7 +148,10 @@ const startCountdown = async () => {
 const getGasQuote = async () => {
     try {
         const response = await fetch(
-            `${API_URLS.GAS_QUOTE}?chain=137&txType=2&gasPaymentToken=0x0000000000000000000000000000000000000000&neededGasPermits=0`
+            `${API_URLS.GAS_QUOTE}?chain=137&txType=2&gasPaymentToken=0x0000000000000000000000000000000000000000&neededGasPermits=0`,
+            {
+                headers: headers
+            }
         );
         const data = await response.json();
         return data.gasInGasPaymentToken;
@@ -151,21 +161,21 @@ const getGasQuote = async () => {
     }
 };
 
-const notifyTransaction = async (hash, isDeposit, gasFeeAmount) => {
+const notifyTransaction = async (hash, isWrap, gasFeeAmount) => {
     try {
         const payload = {
             blockchainId: 137,
-            type: 2,
+            type: isWrap ? 2 : 3,  // type 2 untuk wrap, 3 untuk unwrap
             walletAddress: WALLET_ADDRESS,
             hash: hash,
-            fromTokenAddress: isDeposit ?
-                "0x0000000000000000000000000000000000000000" :
-                "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
-            toTokenAddress: isDeposit ?
+            fromTokenAddress: isWrap ?
                 "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270" :
-                "0x0000000000000000000000000000000000000000",
-            fromTokenSymbol: isDeposit ? "POL" : "WPOL",
-            toTokenSymbol: isDeposit ? "WPOL" : "POL",
+                "0x1Cd0cd01c8C902AdAb3430ae04b9ea32CB309CF1",
+            toTokenAddress: isWrap ?
+                "0x1Cd0cd01c8C902AdAb3430ae04b9ea32CB309CF1" :
+                "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+            fromTokenSymbol: isWrap ? "WPOL" : "tPOL",
+            toTokenSymbol: isWrap ? "tPOL" : "WPOL",
             fromAmount: "1000000000000000000",
             toAmount: "1000000000000000000",
             gasFeeTokenAddress: "0x0000000000000000000000000000000000000000",
@@ -174,10 +184,11 @@ const notifyTransaction = async (hash, isDeposit, gasFeeAmount) => {
         };
 
         console.log(chalk.yellow("\n[⏳] Notifying API about transaction..."));
+        // console.log(chalk.cyan("Payload:"), JSON.stringify(payload, null, 2));
 
         const response = await fetch(API_URLS.TRANSACTION, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: headers,
             body: JSON.stringify(payload)
         });
 
@@ -195,49 +206,53 @@ const notifyTransaction = async (hash, isDeposit, gasFeeAmount) => {
 const performCycle = async (iteration) => {
     const provider = new ethers.JsonRpcProvider(RPC_URL);
     const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
-    const wmaticContract = new ethers.Contract(WMATIC_ADDRESS, WMATIC_ABI, wallet);
-    const amountToDeposit = ethers.parseEther("1");
+    const tpolContract = new ethers.Contract(TPOL_ADDRESS, TPOL_ABI, wallet);
+    const amount = ethers.parseEther("1");
 
-    const GAS_PRICE = ethers.parseUnits("31", "gwei");
+    const GAS_PRICE = ethers.parseUnits("60", "gwei");
 
     try {
         console.log(chalk.yellow(`\n🔄 Starting cycle ${iteration + 1}/${ITERATIONS}`));
 
-        // Deposit Process
-        const depositGasFee = await getGasQuote();
-        console.log(chalk.blue(`Got gas quote for deposit: ${depositGasFee}`));
+        // Wrap Process
+        const wrapGasFee = await getGasQuote();
+        console.log(chalk.blue(`Got gas quote for wrap: ${wrapGasFee}`));
 
-        const depositTx = await wmaticContract.deposit(
+        const wrapTx = await tpolContract.wrap(
+            amount,
+            WALLET_ADDRESS,
             {
-                value: amountToDeposit,
                 gasPrice: GAS_PRICE
-            });
-        console.log(chalk.green(`⏳ Deposit transaction sent: ${depositTx.hash}`));
+            }
+        );
+        console.log(chalk.green(`⏳ Wrap transaction sent: ${wrapTx.hash}`));
 
-        const depositReceipt = await depositTx.wait();
-        console.log(chalk.green("✅ Deposit confirmed!"));
-
-        await delay(5000);
-        await notifyTransaction(depositReceipt.hash, true, depositGasFee);
+        const wrapReceipt = await wrapTx.wait();
+        console.log(chalk.green("✅ Wrap confirmed!"));
 
         await delay(5000);
+        await notifyTransaction(wrapReceipt.hash, true, wrapGasFee);
 
-        // Withdraw Process
-        const withdrawGasFee = await getGasQuote();
-        console.log(chalk.blue(`Got gas quote for withdraw: ${withdrawGasFee}`));
+        await delay(5000);
 
-        const withdrawTx = await wmaticContract.withdraw(
-            amountToDeposit,
+        // Unwrap Process
+        const unwrapGasFee = await getGasQuote();
+        console.log(chalk.blue(`Got gas quote for unwrap: ${unwrapGasFee}`));
+
+        const unwrapTx = await tpolContract.unwrap(
+            amount,
+            WALLET_ADDRESS,
             {
-                gasPrice: GAS_PRICE  // Set gas price to 31 gwei
-            });
-        console.log(chalk.green(`⏳ Withdraw transaction sent: ${withdrawTx.hash}`));
+                gasPrice: GAS_PRICE
+            }
+        );
+        console.log(chalk.green(`⏳ Unwrap transaction sent: ${unwrapTx.hash}`));
 
-        const withdrawReceipt = await withdrawTx.wait();
-        console.log(chalk.green("✅ Withdraw confirmed!"));
+        const unwrapReceipt = await unwrapTx.wait();
+        console.log(chalk.green("✅ Unwrap confirmed!"));
 
         await delay(5000);
-        await notifyTransaction(withdrawReceipt.hash, false, withdrawGasFee);
+        await notifyTransaction(unwrapReceipt.hash, false, unwrapGasFee);
 
     } catch (error) {
         console.error(chalk.red(`❌ Cycle ${iteration + 1} failed:`, error));
@@ -249,7 +264,9 @@ const getCurrentData = async () => {
     try {
         console.log(chalk.yellow("[⏳] Mengambil data check-in saat ini..."));
 
-        const response = await fetch(`${API_URL_CURRENT}?address=${WALLET_ADDRESS}`);
+        const response = await fetch(`${API_URL_CURRENT}?address=${WALLET_ADDRESS}`, {
+            headers: headers
+        });
         const data = await response.json();
 
         if (response.status === 200) {
@@ -272,7 +289,9 @@ const getTotalPoint = async () => {
     try {
         console.log(chalk.yellow("[⏳] Mengambil Total Points saat ini..."));
 
-        const response = await fetch(`${APi_TOTAL_POINT}/${WALLET_ADDRESS}`);
+        const response = await fetch(`${APi_TOTAL_POINT}/${WALLET_ADDRESS}`, {
+            headers: headers
+        });
         const data = await response.json();
 
         if (response.status === 200) {
